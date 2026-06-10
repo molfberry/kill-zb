@@ -1,0 +1,2046 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>僵尸危机3 - 复刻版</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; user-select:none; }
+  html, body { width:100%; height:100%; overflow:hidden; background:#000;
+    font-family: "Microsoft YaHei", "微软雅黑", Arial, sans-serif; color:#fff; }
+  #gameWrap { position:relative; width:100vw; height:100vh; }
+  canvas { display:block; background:#111; cursor:crosshair; image-rendering:pixelated; }
+  /* HUD */
+  #hud { position:absolute; left:0; top:0; width:100%; pointer-events:none;
+    padding:10px 16px; display:flex; justify-content:space-between; align-items:flex-start;
+    text-shadow: 2px 2px 0 #000, 0 0 8px rgba(0,0,0,0.8); }
+  .panel { background:rgba(0,0,0,0.55); border:2px solid #4a4;
+    padding:6px 12px; border-radius:4px; font-size:14px; }
+  .hp-bar { width:220px; height:16px; background:#400; border:2px solid #f44; position:relative; margin-top:4px; }
+  .hp-fill { height:100%; background:linear-gradient(90deg,#f33,#fc6); width:100%; transition:width 0.2s; }
+  .weapon-name { color:#ff6; font-weight:bold; }
+  #overlay { position:absolute; left:0; top:0; width:100%; height:100%;
+    display:flex; flex-direction:column; justify-content:center; align-items:center;
+    background:rgba(0,0,0,0.85); z-index:10; text-align:center; }
+  #overlay h1 { font-size:48px; color:#ff4040; text-shadow:4px 4px 0 #000, 0 0 20px #f00;
+    margin-bottom:20px; letter-spacing:6px; }
+  #overlay h2 { font-size:24px; color:#ffaa00; margin-bottom:30px; }
+  #overlay p { font-size:16px; margin:8px 0; max-width:600px; line-height:1.6; }
+  #overlay button { pointer-events:auto; margin-top:24px; padding:12px 40px; font-size:18px;
+    background:#a00; color:#fff; border:2px solid #f44; cursor:pointer; border-radius:4px;
+    font-weight:bold; letter-spacing:2px; }
+  #overlay button:hover { background:#f33; }
+  .controls { margin-top:20px; font-size:13px; color:#aaa; line-height:1.7; }
+  .key { display:inline-block; padding:2px 6px; background:#222; border:1px solid #555;
+    border-radius:3px; font-family:monospace; margin:0 2px; }
+  #levelInfo { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    font-size:64px; color:#ff4040; font-weight:bold; text-shadow:4px 4px 0 #000;
+    opacity:0; pointer-events:none; transition:opacity 0.5s; z-index:5; }
+  #message { position:absolute; bottom:60px; left:50%; transform:translateX(-50%);
+    background:rgba(0,0,0,0.7); padding:8px 20px; border:1px solid #ff6;
+    font-size:16px; opacity:0; transition:opacity 0.3s; pointer-events:none; }
+  #minimap { position:absolute; right:10px; bottom:10px; background:rgba(0,0,0,0.6);
+    border:2px solid #4a4; }
+</style>
+</head>
+<body>
+<div id="gameWrap">
+  <canvas id="game"></canvas>
+  <div id="hud">
+    <div>
+      <div class="panel">关卡: <span id="lvl">1</span> / 6 &nbsp; 击杀: <span id="kills">0</span> &nbsp; 分数: <span id="score">0</span></div>
+      <div class="panel">生命: <span id="hpText">100</span>/100
+        <div class="hp-bar"><div class="hp-fill" id="hpFill"></div></div>
+      </div>
+    </div>
+    <div>
+      <div class="panel">武器: <span class="weapon-name" id="weaponName">手枪</span> &nbsp;
+        弹药: <span id="ammo">∞</span></div>
+      <div class="panel">Q/E 切换武器 &nbsp; 1/2/3 直接选择</div>
+    </div>
+  </div>
+  <div id="levelInfo"></div>
+  <div id="message"></div>
+  <canvas id="minimap" width="160" height="160"></canvas>
+  <div id="overlay">
+    <h1>僵尸危机 3</h1>
+    <h2>复刻版</h2>
+    <p>一群僵尸已经攻陷了城市，你需要杀出一条血路，逃出生天！</p>
+    <p>抵达每关出口即可进入下一关。坚持到第 6 关,打败最终 BOSS,获得胜利!</p>
+    <div class="controls">
+      <span class="key">W A S D</span> 或 <span class="key">↑ ← ↓ →</span> 移动 &nbsp;
+      <span class="key">鼠标</span> 瞄准 &nbsp;
+      <span class="key">左键</span> 射击 &nbsp;
+      <span class="key">空格</span> 装弹 &nbsp;
+      <span class="key">R</span> 装弹
+    </div>
+    <button id="startBtn">开始游戏</button>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ============== 工具函数 ============== */
+const TAU = Math.PI * 2;
+const rand = (a,b)=> a + Math.random()*(b-a);
+const randi = (a,b)=> Math.floor(rand(a,b));
+const clamp = (v,a,b)=> v<a?a:(v>b?b:v);
+const dist2 = (ax,ay,bx,by)=> (ax-bx)*(ax-bx)+(ay-by)*(ay-by);
+const dist = (ax,ay,bx,by)=> Math.sqrt(dist2(ax,ay,bx,by));
+const lerp = (a,b,t)=> a + (b-a)*t;
+const angleTo = (ax,ay,bx,by)=> Math.atan2(by-ay, bx-ax);
+
+/* ============== 画布 ============== */
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const mini = document.getElementById('minimap');
+const mctx = mini.getContext('2d');
+let W = 0, H = 0, VIEW_W = 0, VIEW_H = 0;
+function resize() {
+  W = window.innerWidth; H = window.innerHeight;
+  VIEW_W = Math.min(W, 1280);
+  VIEW_H = Math.min(H, 720);
+  canvas.width = W; canvas.height = H;
+  // 视口：固定逻辑分辨率，按比例缩放
+  const scale = Math.min(W / VIEW_W, H / VIEW_H);
+  // 让游戏区居中
+  ctx.imageSmoothingEnabled = false;
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* ============== 输入 ============== */
+const keys = {};
+const mouse = { x:0, y:0, down:false, worldX:0, worldY:0 };
+window.addEventListener('keydown', e=>{
+  keys[e.key.toLowerCase()] = true;
+  if (['arrowup','arrowdown','arrowleft','arrowright',' '].includes(e.key.toLowerCase())) e.preventDefault();
+  if (e.key === ' ') tryReload();
+  if (e.key.toLowerCase() === 'r') tryReload();
+  if (e.key === '1') switchWeapon(0);
+  if (e.key === '2') switchWeapon(1);
+  if (e.key === '3') switchWeapon(2);
+  if (e.key.toLowerCase() === 'q') switchWeapon((player.weaponIdx+player.weapons.length-1)%player.weapons.length);
+  if (e.key.toLowerCase() === 'e') switchWeapon((player.weaponIdx+1)%player.weapons.length);
+});
+window.addEventListener('keyup', e=>{ keys[e.key.toLowerCase()] = false; });
+canvas.addEventListener('mousemove', e=>{
+  const r = canvas.getBoundingClientRect();
+  mouse.x = e.clientX - r.left;
+  mouse.y = e.clientY - r.top;
+  // 转换到世界坐标（考虑摄像机偏移）
+  mouse.worldX = mouse.x - W/2 + camera.x;
+  mouse.worldY = mouse.y - H/2 + camera.y;
+});
+canvas.addEventListener('mousedown', e=>{ if (e.button === 0) mouse.down = true; });
+canvas.addEventListener('mouseup', e=>{ if (e.button === 0) mouse.down = false; });
+canvas.addEventListener('contextmenu', e=> e.preventDefault());
+
+/* ============== 摄像机 ============== */
+const camera = { x:0, y:0, shake:0, shakeX:0, shakeY:0 };
+function updateCamera() {
+  // 摄像机以逻辑视口中心为锚点
+  camera.x = lerp(camera.x, player.x, 0.12);
+  camera.y = lerp(camera.y, player.y, 0.12);
+  // 屏幕震动
+  if (camera.shake > 0) {
+    camera.shake -= 0.5;
+    camera.shakeX = rand(-camera.shake, camera.shake);
+    camera.shakeY = rand(-camera.shake, camera.shake);
+  } else {
+    camera.shakeX = camera.shakeY = 0;
+  }
+}
+
+/* ============== 地图 ============== */
+const TILE = 48;
+let mapW = 0, mapH = 0;
+let walls = new Set(); // Set of "x,y"
+let floor = []; // {x,y,color}
+let exits = new Set(); // Set of "x,y"
+let spawnPoints = [];
+let levelTheme = { wall:'#3a2a1a', floor:'#2a1a0a', accent:'#a04020' };
+
+function makeMap(levelIdx) {
+  // 设计 6 个关卡。关卡越大越复杂。
+  // 返回: { mapW, mapH, walls:Set, exits:[], spawnPoints:[] }
+  const designs = [
+    // 第1关: 街道小区域
+    {
+      size: [32, 22],
+      walls: [
+        // 围栏
+        ...borderWalls(32,22),
+        // 内部建筑
+        [4,4,3,2],[9,3,2,3],[15,4,3,2],[22,5,2,2],
+        [4,10,4,2],[14,10,2,3],[20,11,3,2],
+        [5,16,2,2],[11,15,4,2],[18,17,3,2],[24,15,2,3],
+        [3,13,1,1],
+      ],
+      exit: [28, 18, 2, 2],
+      theme: { wall:'#5a4020', floor:'#3a2810', accent:'#a06030', bg:'#1a0e08' }
+    },
+    // 第2关: 仓库
+    {
+      size: [36, 24],
+      walls: [
+        ...borderWalls(36,24),
+        [5,4,6,2],[14,3,3,4],[20,5,5,2],
+        [3,10,2,6],[8,11,4,2],[15,12,6,2],[24,11,2,4],[29,10,3,2],
+        [4,17,3,2],[10,18,5,2],[18,17,3,3],[24,19,4,2],
+        [29,17,3,3],
+      ],
+      exit: [32, 20, 2, 2],
+      theme: { wall:'#404a5a', floor:'#202a3a', accent:'#6080a0', bg:'#0a0e1a' }
+    },
+    // 第3关: 公园/医院
+    {
+      size: [40, 26],
+      walls: [
+        ...borderWalls(40,26),
+        [6,5,3,1],[12,4,4,3],[19,5,2,4],[24,4,5,2],
+        [3,11,2,5],[8,10,3,2],[13,12,2,3],[18,11,4,2],[25,12,3,2],[32,11,4,2],
+        [5,18,4,2],[12,19,3,3],[18,18,2,2],[23,19,5,2],[30,18,4,2],
+        [3,22,2,2],[15,22,2,2],[28,22,2,2],
+      ],
+      exit: [36, 22, 2, 2],
+      theme: { wall:'#4a3a4a', floor:'#2a1a2a', accent:'#a060a0', bg:'#100810' }
+    },
+    // 第4关: 商业街
+    {
+      size: [44, 26],
+      walls: [
+        ...borderWalls(44,26),
+        [4,4,2,4],[9,3,3,2],[15,4,4,2],[22,3,3,3],[28,4,4,2],
+        [35,5,3,2],[40,4,2,4],
+        [3,10,2,4],[8,9,3,2],[14,11,5,2],[21,10,3,3],[27,9,4,2],
+        [33,11,2,3],[38,10,3,2],
+        [4,17,3,2],[10,18,4,2],[16,17,3,3],[22,18,5,2],[30,17,3,2],[36,18,4,2],
+        [3,22,2,2],[14,22,2,2],[26,22,2,2],[38,22,2,2],
+      ],
+      exit: [40, 22, 2, 2],
+      theme: { wall:'#604030', floor:'#3a2010', accent:'#c08040', bg:'#1a1008' }
+    },
+    // 第5关: 地铁站
+    {
+      size: [48, 28],
+      walls: [
+        ...borderWalls(48,28),
+        [4,4,2,6],[9,5,3,2],[15,4,2,4],[20,5,4,2],[27,4,3,3],
+        [33,5,4,2],[40,4,4,3],
+        [3,12,2,3],[8,11,3,2],[14,13,4,2],[21,12,3,2],[27,13,5,2],
+        [35,12,2,3],[40,11,4,2],
+        [5,18,3,2],[11,19,4,2],[17,18,3,3],[23,19,4,2],[29,18,3,2],
+        [35,19,4,2],[42,18,2,3],
+        [3,23,2,2],[16,23,2,2],[28,23,2,2],[40,23,2,2],
+      ],
+      exit: [44, 24, 2, 2],
+      theme: { wall:'#3a3a4a', floor:'#1a1a2a', accent:'#6060a0', bg:'#08080f' }
+    },
+    // 第6关: 终极实验室
+    {
+      size: [52, 30],
+      walls: [
+        ...borderWalls(52,30),
+        // 复杂的实验室布局
+        [4,4,3,2],[10,3,4,3],[17,4,3,2],[23,3,4,3],[30,4,3,2],
+        [36,3,4,3],[43,4,3,2],
+        [3,9,2,5],[8,10,3,2],[14,11,4,2],[21,10,3,2],[27,11,4,2],
+        [34,10,3,2],[40,11,4,2],[47,9,2,5],
+        [5,17,4,2],[12,18,3,3],[18,17,5,2],[26,18,3,2],[32,17,4,2],
+        [39,18,3,3],[45,17,3,2],
+        [4,22,2,4],[9,23,4,2],[16,22,3,3],[22,23,4,2],[29,22,3,2],
+        [35,23,4,2],[42,22,3,3],[48,23,2,3],
+        [3,28,46,0], // 末关底部走廊
+      ],
+      exit: [48, 26, 2, 2],
+      theme: { wall:'#2a4a3a', floor:'#0a2a1a', accent:'#40c080', bg:'#04100a' }
+    }
+  ];
+  const d = designs[levelIdx];
+  const wS = d.walls;
+  mapW = d.size[0]; mapH = d.size[1];
+  walls = new Set();
+  // 矩形墙
+  wS.forEach(([x,y,wd,ht])=>{
+    for (let i=0;i<wd;i++) for (let j=0;j<ht;j++) walls.add((x+i)+','+(y+j));
+  });
+  // 出口
+  exits = new Set();
+  const [ex,ey,ew,eh] = d.exit;
+  for (let i=0;i<ew;i++) for (let j=0;j<eh;j++) exits.add((ex+i)+','+(ey+j));
+  // 玩家出生点
+  spawnPoints = [{x: 2*TILE + TILE/2, y: 2*TILE + TILE/2}];
+  levelTheme = d.theme;
+}
+
+function borderWalls(w,h) {
+  const arr = [];
+  for (let x=0;x<w;x++) { arr.push([x,0,1,1]); arr.push([x,h-1,1,1]); }
+  for (let y=0;y<h;y++) { arr.push([0,y,1,1]); arr.push([w-1,y,1,1]); }
+  return arr;
+}
+function isWall(tx, ty) { return walls.has(tx+','+ty); }
+function isExit(tx, ty) { return exits.has(tx+','+ty); }
+function worldToTile(x,y) { return [Math.floor(x/TILE), Math.floor(y/TILE)]; }
+function tileToWorld(tx,ty) { return [tx*TILE + TILE/2, ty*TILE + TILE/2]; }
+function collidesAt(x, y, r=10) {
+  // 检查圆形是否与墙碰撞
+  const checks = [
+    [x-r, y-r], [x+r, y-r], [x-r, y+r], [x+r, y+r],
+    [x-r, y], [x+r, y], [x, y-r], [x, y+r]
+  ];
+  for (const [cx,cy] of checks) {
+    const [tx,ty] = worldToTile(cx,cy);
+    if (isWall(tx,ty)) return true;
+  }
+  return false;
+}
+function moveWithCollision(obj, dx, dy) {
+  // X 轴
+  obj.x += dx;
+  if (collidesAt(obj.x, obj.y, obj.r)) obj.x -= dx;
+  // Y 轴
+  obj.y += dy;
+  if (collidesAt(obj.x, obj.y, obj.r)) obj.y -= dy;
+}
+
+/* ============== 武器 ============== */
+const WEAPONS = {
+  pistol: {
+    name:'手枪', damage:22, fireRate:220, reload:1100, mag:12, ammo:999, spread:0.04,
+    bulletSpeed:18, count:1, color:'#ffd060', auto:false, desc:'无限备弹,基础武器'
+  },
+  shotgun: {
+    name:'霰弹枪', damage:14, fireRate:780, reload:1600, mag:6, ammo:48, spread:0.22,
+    bulletSpeed:16, count:6, color:'#ff8060', auto:false, desc:'近战之王,范围杀伤'
+  },
+  rifle: {
+    name:'步枪', damage:38, fireRate:120, reload:1800, mag:30, ammo:180, spread:0.06,
+    bulletSpeed:24, count:1, color:'#80ff80', auto:true, desc:'高速连射,中距离压制'
+  }
+};
+
+/* ============== 玩家 ============== */
+const player = {
+  x:0, y:0, r:16, hp:100, maxHp:100,
+  speed:3.4, angle:0,
+  walkPhase: 0, isMoving: false,
+  weapons: ['pistol'],
+  weaponIdx: 0,
+  kills:0, score:0, lives:0,
+  fireCD:0, reloadCD:0, reloading:false,
+  mag:0, ammo:0, totalAmmo:0,
+  invincible:0,
+  muzzleFlash:0,
+  hasWeapon(wn) { return this.weapons.includes(wn); },
+  giveWeapon(wn) { if (!this.hasWeapon(wn)) this.weapons.push(wn); }
+};
+
+/* ============== 实体数组 ============== */
+let bullets = [];
+let enemies = [];
+let particles = [];
+let pickups = [];
+let damageNums = [];
+let bloodDecals = [];    // 地面上的持久血迹
+let bloodDroplets = [];  // 抛物线血滴(带重力)
+
+/* ============== 敌人类型 ============== */
+const ENEMY_TYPES = {
+  walker:  { name:'行尸', hp:35, speed:1.15, r:14, color:'#5a8a4a', damage:10, score:50, gold:0.2, sight:2400, attackCD:900, attackRange:38 },
+  runner:  { name:'迅尸', hp:25, speed:2.3,  r:12, color:'#aac050', damage:8,  score:70, gold:0.3, sight:2400, attackCD:600, attackRange:36 },
+  tank:    { name:'肉山', hp:160, speed:0.85, r:22, color:'#5a3a2a', damage:18, score:160, gold:0.5, sight:2400, attackCD:1300, attackRange:48 },
+  spitter: { name:'吐酸', hp:45, speed:1.0, r:14, color:'#a050c0', damage:0,  score:90, gold:0.4, sight:2400, attackCD:1500, attackRange:380, ranged:true, projDamage:14, projSpeed:6 },
+  boss:    { name:'暴君', hp:1200, speed:1.0, r:34, color:'#aa2020', damage:28, score:2000, gold:1.0, sight:3000, attackCD:900, attackRange:60 }
+};
+
+function spawnEnemy(type, x, y) {
+  const t = ENEMY_TYPES[type];
+  // 关卡缩放: 第1关 1.0x, 每升一关 +0.12, 第6关 ≈ 1.6x
+  const lvlMul = 1.0 + level * 0.12;
+  // 个体随机扰动 ±15%
+  const variance = 0.85 + Math.random() * 0.3;
+  // 随机 variation 让每只僵尸长得不一样
+  const variation = {
+    skinTone: Math.random(),                          // 病态肤色选择
+    tornDir: Math.random() < 0.5 ? -1 : 1,            // 哪只眼是空洞
+    armDrag: 0.6 + Math.random() * 0.7,               // 拖地手长度
+    jawTilt: (Math.random() - 0.5) * 0.5,             // 头部倾斜
+    rotPhase: Math.random() * TAU,                    // 动画相位差
+    limp: Math.random() < 0.35,                       // 是否瘸腿
+    exposed: Math.random() < 0.6                      // 是否露出肋骨
+  };
+  enemies.push({
+    type, x, y, r:t.r, hp:t.hp, maxHp:t.hp,
+    speed: t.speed * lvlMul * variance,
+    damage:t.damage, score:t.score,
+    color:t.color, sight:t.sight, attackCD:t.attackCD, attackRange:t.attackRange,
+    ranged:!!t.ranged, projDamage:t.projDamage||0, projSpeed:t.projSpeed||0,
+    name:t.name,
+    hitFlash:0, knockback:{x:0,y:0}, stun:0, anim:0,
+    isBoss:type==='boss',
+    wanderAng: Math.random()*TAU, wanderCD: randi(40,200),
+    variation
+  });
+}
+
+/* ============== 子弹/投射物 ============== */
+function spawnBullet(x,y,angle,opts) {
+  bullets.push({
+    x, y, vx:Math.cos(angle)*opts.speed, vy:Math.sin(angle)*opts.speed,
+    life:opts.life||60, damage:opts.damage, color:opts.color||'#ffd060',
+    r: opts.r||3, fromPlayer:!!opts.fromPlayer, knockback:opts.knockback||0,
+    pierce: opts.pierce||0
+  });
+}
+
+/* ============== 粒子 ============== */
+function spawnParticle(x,y,vx,vy,life,color,size=3) {
+  particles.push({x,y,vx,vy,life,maxLife:life,color,size});
+}
+function spawnBurst(x,y,color,count=8,spd=4) {
+  for (let i=0;i<count;i++) {
+    const a = Math.random()*TAU;
+    const s = rand(1,spd);
+    spawnParticle(x,y,Math.cos(a)*s,Math.sin(a)*s,rand(20,40),color,rand(2,4));
+  }
+}
+function spawnDamageNum(x,y,val,color='#fff') {
+  damageNums.push({x, y:y-8, vy:-1.2, life:50, maxLife:50, val, color});
+}
+
+/* ============== 血液飞溅 ============== */
+const BLOOD_BRIGHT = ['#ff3030', '#e61818', '#cc0a0a', '#a80808'];
+const BLOOD_DARK   = ['#6a0808', '#4a0404', '#3a0202', '#8a0a0a'];
+const BLOOD_MAX_DECALS = 320; // 防止血迹无限堆积
+
+// 在 (x,y) 处生成血液飞溅
+// dirX/dirY: 子弹飞行方向(用于计算反向喷射)
+// intensity: 强度(0.5~2.5), 取决于伤害/武器
+function spawnBloodSplatter(x, y, dirX, dirY, intensity) {
+  intensity = intensity || 1;
+  const sp = Math.hypot(dirX, dirY) || 1;
+  const nx = dirX / sp, ny = dirY / sp;
+  // 子弹来的方向 = 反向喷射
+  const backA = Math.atan2(-ny, -nx);
+
+  // 1) 反向血雾 — 子弹穿过时把血液往后推
+  for (let i = 0; i < Math.floor(11 * intensity); i++) {
+    const a = backA + (Math.random() - 0.5) * 1.5;
+    const s = rand(2.5, 6) * intensity;
+    spawnParticle(
+      x, y,
+      Math.cos(a) * s, Math.sin(a) * s,
+      rand(16, 34),
+      BLOOD_BRIGHT[randi(0, BLOOD_BRIGHT.length)],
+      rand(2, 4)
+    );
+  }
+  // 2) 周围散开细雾
+  for (let i = 0; i < Math.floor(5 * intensity); i++) {
+    const a = Math.random() * TAU;
+    const s = rand(0.6, 2.4);
+    spawnParticle(x, y, Math.cos(a) * s, Math.sin(a) * s, rand(10, 20), '#a00808', rand(1, 2));
+  }
+  // 3) 抛物线血滴(会落地形成血迹)
+  for (let i = 0; i < Math.floor(5 * intensity); i++) {
+    const a = backA + (Math.random() - 0.5) * 1.4;
+    const s = rand(3, 6.5) * intensity;
+    bloodDroplets.push({
+      x, y,
+      vx: Math.cos(a) * s,
+      vy: Math.sin(a) * s,
+      life: rand(40, 70),
+      maxLife: 70,
+      color: BLOOD_BRIGHT[randi(0, BLOOD_BRIGHT.length)],
+      size: rand(2, 4)
+    });
+  }
+  // 4) 地面血迹 — 沿后方散开
+  for (let i = 0; i < Math.floor(3 * intensity); i++) {
+    const a = backA + (Math.random() - 0.5) * 1.2;
+    const dist = rand(2, 18);
+    bloodDecals.push({
+      x: x + Math.cos(a) * dist,
+      y: y + Math.sin(a) * dist,
+      r: rand(3, 7) * intensity,
+      rot: Math.random() * TAU,
+      shape: Math.random() < 0.55 ? 'blob' : 'splash',
+      color: BLOOD_DARK[randi(0, BLOOD_DARK.length)],
+      life: 0,
+      maxLife: 1500 + randi(0, 400)
+    });
+  }
+  // 中心血泊
+  bloodDecals.push({
+    x, y,
+    r: rand(3, 5) * intensity,
+    rot: Math.random() * TAU,
+    shape: 'blob',
+    color: BLOOD_DARK[randi(0, BLOOD_DARK.length)],
+    life: 0,
+    maxLife: 1800
+  });
+  // 5) 高速命中亮黄爆点
+  if (intensity >= 1) {
+    for (let i = 0; i < 3; i++) {
+      spawnParticle(
+        x + (Math.random()-0.5)*3, y + (Math.random()-0.5)*3,
+        (Math.random()-0.5)*1.5, (Math.random()-0.5)*1.5,
+        4, '#fff0a0', rand(1, 2)
+      );
+    }
+  }
+  // 防止血迹无限堆积
+  while (bloodDecals.length > BLOOD_MAX_DECALS) bloodDecals.shift();
+}
+
+function updateBloodDroplets() {
+  // 抛物线血滴
+  for (let i = bloodDroplets.length - 1; i >= 0; i--) {
+    const d = bloodDroplets[i];
+    d.x += d.vx;
+    d.y += d.vy;
+    d.vy += 0.32;   // 重力
+    d.vx *= 0.95;   // 空气阻力
+    d.life--;
+    const [tx, ty] = worldToTile(d.x, d.y);
+    if (isWall(tx, ty) || d.life <= 0) {
+      // 落地留下一小滩血迹
+      bloodDecals.push({
+        x: d.x, y: d.y,
+        r: rand(1.5, 3),
+        rot: Math.random() * TAU,
+        shape: 'blob',
+        color: BLOOD_DARK[randi(0, BLOOD_DARK.length)],
+        life: 0,
+        maxLife: 900
+      });
+      while (bloodDecals.length > BLOOD_MAX_DECALS) bloodDecals.shift();
+      bloodDroplets.splice(i, 1);
+    }
+  }
+  // 血迹淡出(最后 30% 寿命开始透明)
+  for (let i = bloodDecals.length - 1; i >= 0; i--) {
+    const d = bloodDecals[i];
+    d.life++;
+    if (d.life > d.maxLife) bloodDecals.splice(i, 1);
+  }
+}
+
+function renderBloodDecals() {
+  for (const d of bloodDecals) {
+    const [sx, sy] = worldToScreen(d.x, d.y);
+    // 淡出阶段
+    const fadeStart = d.maxLife * 0.7;
+    let alpha = 1;
+    if (d.life > fadeStart) alpha = 1 - (d.life - fadeStart) / (d.maxLife - fadeStart);
+    alpha = clamp(alpha, 0, 1) * 0.9;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(sx, sy);
+    ctx.rotate(d.rot);
+    ctx.fillStyle = d.color;
+    if (d.shape === 'blob') {
+      // 椭圆形血泊
+      ctx.beginPath();
+      ctx.ellipse(0, 0, d.r, d.r * 0.65, 0, 0, TAU);
+      ctx.fill();
+      // 旁侧溅点
+      ctx.globalAlpha = alpha * 0.55;
+      ctx.beginPath();
+      ctx.arc(d.r * 0.75, -d.r * 0.25, d.r * 0.28, 0, TAU);
+      ctx.fill();
+    } else {
+      // 拉长飞溅形
+      ctx.beginPath();
+      ctx.ellipse(0, 0, d.r * 1.4, d.r * 0.4, 0, 0, TAU);
+      ctx.fill();
+      ctx.globalAlpha = alpha * 0.6;
+      ctx.beginPath();
+      ctx.ellipse(d.r * 0.4, -d.r * 0.4, d.r * 0.6, d.r * 0.2, 0.3, 0, TAU);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function renderBloodDroplets() {
+  for (const d of bloodDroplets) {
+    const [sx, sy] = worldToScreen(d.x, d.y);
+    const a = d.life / d.maxLife;
+    ctx.fillStyle = d.color;
+    ctx.globalAlpha = a;
+    // 椭圆形血滴(尾迹方向沿运动方向)
+    const ang = Math.atan2(d.vy, d.vx);
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(ang);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, d.size * 1.3, d.size * 0.7, 0, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* ============== 拾取物 ============== */
+const PICKUP_TYPES = {
+  health:  { color:'#ff4060', char:'+', label:'医疗包' },
+  ammo:    { color:'#ffc040', char:'•', label:'弹药' },
+  weapon_shotgun: { color:'#ff8060', char:'▦', label:'霰弹枪' },
+  weapon_rifle:   { color:'#80ff80', char:'▣', label:'步枪' }
+};
+function spawnPickup(x,y,type) {
+  pickups.push({x,y,r:12,type,bob:Math.random()*TAU});
+}
+
+/* ============== 关卡管理 ============== */
+let level = 0;
+let totalKills = 0;
+let totalScore = 0;
+let levelZombiesLeft = 0;
+let bossSpawned = false;
+let gameState = 'menu'; // menu, playing, paused, won, lost, levelEnd
+let levelEndTimer = 0;
+let messageTimer = 0;
+let frame = 0;
+let lastTime = performance.now();
+let waveTimer = 0;
+let spawnedThisWave = 0;
+let currentWave = 0;
+
+function startGame() {
+  player.hp = 100; player.maxHp = 100;
+  player.kills = 0; player.score = 0; player.lives = 0;
+  player.weapons = ['pistol']; player.weaponIdx = 0;
+  player.invincible = 120;
+  totalKills = 0; totalScore = 0;
+  level = 0;
+  loadLevel(level);
+  gameState = 'playing';
+  document.getElementById('overlay').style.display = 'none';
+}
+
+function loadLevel(idx) {
+  makeMap(idx);
+  player.x = 2*TILE + TILE/2;
+  player.y = 2*TILE + TILE/2;
+  camera.x = player.x; camera.y = player.y;
+  bullets = []; enemies = []; particles = []; pickups = []; damageNums = [];
+  bloodDecals = []; bloodDroplets = [];
+  player.fireCD = 0; player.reloadCD = 0; player.reloading = false;
+  // 给玩家初始手枪并补满
+  player.mag = WEAPONS.pistol.mag;
+  player.ammo = 999;
+  // 每关初始补给
+  // 散布拾取物
+  for (let i=0;i<3+idx;i++) {
+    let x,y,tries=0;
+    do {
+      x = randi(2, mapW-2)*TILE + TILE/2;
+      y = randi(2, mapH-2)*TILE + TILE/2;
+      tries++;
+    } while (tries<20 && (collidesAt(x,y,8) || dist2(x,y,player.x,player.y) < 60*60));
+    if (Math.random()<0.55) spawnPickup(x,y,'health');
+    else spawnPickup(x,y,'ammo');
+  }
+  // 一些武器掉落
+  if (idx >= 1 && !player.hasWeapon('shotgun')) {
+    let x,y,tries=0;
+    do {
+      x = randi(2, mapW-2)*TILE + TILE/2;
+      y = randi(2, mapH-2)*TILE + TILE/2;
+      tries++;
+    } while (tries<20 && (collidesAt(x,y,8) || dist2(x,y,player.x,player.y) < 80*80));
+    spawnPickup(x,y,'weapon_shotgun');
+  }
+  if (idx >= 2 && !player.hasWeapon('rifle')) {
+    let x,y,tries=0;
+    do {
+      x = randi(2, mapW-2)*TILE + TILE/2;
+      y = randi(2, mapH-2)*TILE + TILE/2;
+      tries++;
+    } while (tries<20 && (collidesAt(x,y,8) || dist2(x,y,player.x,player.y) < 80*80));
+    spawnPickup(x,y,'weapon_rifle');
+  }
+  // 关卡僵尸数量：递增但每关都保持可玩
+  const baseCount = [12, 18, 22, 26, 30, 18][idx];
+  levelZombiesLeft = baseCount;
+  bossSpawned = false;
+  waveTimer = 0; spawnedThisWave = 0; currentWave = 0;
+  document.getElementById('levelInfo').textContent = '第 ' + (idx+1) + ' 关';
+  document.getElementById('levelInfo').style.opacity = '1';
+  setTimeout(()=>{ document.getElementById('levelInfo').style.opacity = '0'; }, 1800);
+  showMessage('抵达出口进入下一关!');
+}
+
+/* ============== 关卡内波次生成 ============== */
+function spawnWave() {
+  if (levelZombiesLeft <= 0) return;
+  const waveSize = Math.min(5 + currentWave*2, levelZombiesLeft);
+  for (let i=0;i<waveSize;i++) {
+    spawnRandomZombie();
+    levelZombiesLeft--;
+  }
+  spawnedThisWave += waveSize;
+  currentWave++;
+}
+function spawnRandomZombie() {
+  // 根据关卡选择类型
+  const r = Math.random();
+  let type = 'walker';
+  if (level >= 1 && r < 0.25) type = 'runner';
+  if (level >= 2 && r < 0.45) type = 'tank';
+  if (level >= 3 && r < 0.6) type = 'spitter';
+  // 找地图边缘
+  let x,y,tries=0;
+  do {
+    const edge = randi(0,4);
+    if (edge===0) { x = randi(1, mapW-1)*TILE + TILE/2; y = TILE*1.2; }
+    else if (edge===1) { x = randi(1, mapW-1)*TILE + TILE/2; y = (mapH-1.2)*TILE; }
+    else if (edge===2) { x = TILE*1.2; y = randi(1, mapH-1)*TILE + TILE/2; }
+    else { x = (mapW-1.2)*TILE; y = randi(1, mapH-1)*TILE + TILE/2; }
+    tries++;
+  } while (tries<10 && (collidesAt(x,y,12) || dist2(x,y,player.x,player.y) < 200*200));
+  spawnEnemy(type, x, y);
+}
+
+function spawnBoss() {
+  // BOSS 出现在远离玩家的位置
+  let x,y,tries=0;
+  do {
+    x = randi(2, mapW-2)*TILE + TILE/2;
+    y = randi(2, mapH-2)*TILE + TILE/2;
+    tries++;
+  } while (tries<20 && (collidesAt(x,y,28) || dist2(x,y,player.x,player.y) < 500*500));
+  spawnEnemy('boss', x, y);
+  bossSpawned = true;
+  showMessage('警告: 暴君出现!');
+}
+
+/* ============== 玩家更新 ============== */
+function updatePlayer(dt) {
+  // 移动
+  let dx = 0, dy = 0;
+  if (keys['w'] || keys['arrowup']) dy -= 1;
+  if (keys['s'] || keys['arrowdown']) dy += 1;
+  if (keys['a'] || keys['arrowleft']) dx -= 1;
+  if (keys['d'] || keys['arrowright']) dx += 1;
+  if (dx || dy) {
+    const len = Math.sqrt(dx*dx+dy*dy);
+    dx /= len; dy /= len;
+    moveWithCollision(player, dx*player.speed, dy*player.speed);
+    player.isMoving = true;
+    player.walkPhase += dt * 0.018;
+  } else {
+    player.isMoving = false;
+  }
+  // 朝向
+  player.angle = angleTo(player.x, player.y, mouse.worldX, mouse.worldY);
+  // 武器
+  if (player.fireCD > 0) player.fireCD -= dt;
+  if (player.reloadCD > 0) player.reloadCD -= dt;
+  else if (player.reloading) {
+    player.reloading = false;
+    const w = WEAPONS[player.weapons[player.weaponIdx]];
+    const need = w.mag - player.mag;
+    const take = Math.min(need, player.ammo);
+    player.mag += take;
+    player.ammo -= take;
+  }
+  if (player.muzzleFlash > 0) player.muzzleFlash -= dt;
+  if (player.invincible > 0) player.invincible -= dt;
+  // 射击
+  if (mouse.down) tryFire();
+}
+
+function currentWeapon() { return WEAPONS[player.weapons[player.weaponIdx]]; }
+
+function switchWeapon(idx) {
+  if (idx < 0 || idx >= player.weapons.length) return;
+  if (player.reloading) {
+    player.reloading = false; player.reloadCD = 0;
+  }
+  player.weaponIdx = idx;
+}
+
+function tryFire() {
+  const wn = player.weapons[player.weaponIdx];
+  const w = WEAPONS[wn];
+  if (player.fireCD > 0 || player.reloading) return;
+  if (player.mag <= 0) {
+    tryReload();
+    return;
+  }
+  for (let i=0;i<w.count;i++) {
+    const a = player.angle + (Math.random()-0.5)*w.spread*2;
+    spawnBullet(player.x, player.y, a, {
+      speed: w.bulletSpeed, damage: w.damage, color: w.color,
+      life: 70, r: 3, fromPlayer: true, knockback: w.knockback||0
+    });
+  }
+  player.mag--;
+  player.fireCD = w.fireRate;
+  player.muzzleFlash = 80;
+  // 后坐力视觉
+  camera.shake = Math.max(camera.shake, 2);
+  // 后坐力位移
+  const recoil = w.recoil||0;
+  if (recoil) {
+    player.x -= Math.cos(player.angle) * recoil;
+    player.y -= Math.sin(player.angle) * recoil;
+  }
+  // 枪口火光粒子
+  const mx = player.x + Math.cos(player.angle)*22;
+  const my = player.y + Math.sin(player.angle)*22;
+  spawnParticle(mx, my, Math.cos(player.angle)*3, Math.sin(player.angle)*3, 8, '#ffea60', 4);
+  spawnParticle(mx, my, Math.cos(player.angle+0.5)*2, Math.sin(player.angle+0.5)*2, 6, '#ffaa30', 3);
+  if (player.mag <= 0) tryReload();
+}
+
+function tryReload() {
+  const wn = player.weapons[player.weaponIdx];
+  const w = WEAPONS[wn];
+  if (player.reloading || player.mag >= w.mag) return;
+  if (wn === 'pistol') {
+    // 手枪：直接补满弹匣（无限备弹）
+    player.mag = w.mag;
+    return;
+  }
+  if (player.ammo <= 0) return;
+  player.reloading = true;
+  player.reloadCD = w.reload;
+}
+
+/* ============== 敌人 AI ============== */
+function updateEnemies(dt) {
+  for (let i = enemies.length-1; i >= 0; i--) {
+    const e = enemies[i];
+    e.anim += dt*0.01;
+    if (e.hitFlash > 0) e.hitFlash -= dt;
+    if (e.stun > 0) e.stun -= dt;
+    if (e.attackCD > 0) e.attackCD -= dt;
+    // knockback
+    e.x += e.knockback.x;
+    e.y += e.knockback.y;
+    e.knockback.x *= 0.85;
+    e.knockback.y *= 0.85;
+    if (collidesAt(e.x, e.y, e.r)) {
+      e.x -= e.knockback.x;
+      e.y -= e.knockback.y;
+      e.knockback.x = 0; e.knockback.y = 0;
+    }
+    // 视距
+    const d = dist(e.x, e.y, player.x, player.y);
+    if (d < e.sight && e.stun <= 0) {
+      const a = angleTo(e.x, e.y, player.x, player.y);
+      // 走：即使在攻击范围内也保持微移贴近
+      if (d > e.attackRange * 0.9) {
+        const spd = e.speed * (e.stun > 0 ? 0.3 : 1);
+        const mx = Math.cos(a)*spd;
+        const my = Math.sin(a)*spd;
+        moveWithCollision(e, mx, my);
+      } else if (e.attackCD <= 0) {
+        // 攻击
+        if (e.ranged) {
+          // 投射物
+          const ang = a + (Math.random()-0.5)*0.1;
+          spawnBullet(e.x, e.y, ang, {
+            speed: e.projSpeed, damage: e.projDamage, color: '#c060ff',
+            life: 80, r: 5, fromPlayer:false
+          });
+          e.attackCD = ENEMY_TYPES[e.type].attackCD;
+        } else {
+          // 近战
+          if (player.invincible <= 0) {
+            player.hp -= e.damage;
+            player.invincible = 18;
+            camera.shake = 6;
+            spawnBurst(player.x, player.y, '#ff4040', 6, 3);
+          }
+          e.attackCD = ENEMY_TYPES[e.type].attackCD;
+        }
+      }
+    } else if (e.stun <= 0) {
+      // 玩家不在视野内：随机巡逻
+      e.wanderCD -= dt;
+      if (e.wanderCD <= 0) {
+        e.wanderAng = Math.random()*TAU;
+        e.wanderCD = randi(60, 240);
+      }
+      const spd = e.speed * 0.4;  // 巡逻速度较慢
+      moveWithCollision(e, Math.cos(e.wanderAng)*spd, Math.sin(e.wanderAng)*spd);
+      // 撞墙就换个方向
+      if (collidesAt(e.x + Math.cos(e.wanderAng)*8, e.y + Math.sin(e.wanderAng)*8, e.r)) {
+        e.wanderAng += Math.PI*0.7;
+      }
+    }
+  }
+}
+
+/* ============== 子弹更新 ============== */
+function updateBullets(dt) {
+  for (let i = bullets.length-1; i >= 0; i--) {
+    const b = bullets[i];
+    b.x += b.vx;
+    b.y += b.vy;
+    b.life--;
+    if (b.life <= 0) { bullets.splice(i,1); continue; }
+    // 墙碰撞
+    const [tx,ty] = worldToTile(b.x, b.y);
+    if (isWall(tx,ty)) {
+      spawnBurst(b.x, b.y, '#ffaa30', 4, 2);
+      bullets.splice(i,1); continue;
+    }
+    if (b.fromPlayer) {
+      // 撞敌人
+      for (let j = enemies.length-1; j >= 0; j--) {
+        const e = enemies[j];
+        if (dist2(b.x,b.y,e.x,e.y) < (e.r+b.r)*(e.r+b.r)) {
+          e.hp -= b.damage;
+          e.hitFlash = 100;
+          e.stun = 18;
+          // 击退
+          const ka = Math.atan2(b.vy, b.vx);
+          e.knockback.x += Math.cos(ka)*b.knockback*0.3;
+          e.knockback.y += Math.sin(ka)*b.knockback*0.3;
+          // 血液飞溅 — 强度按伤害缩放
+          spawnBloodSplatter(b.x, b.y, b.vx, b.vy, Math.max(0.6, b.damage/22));
+          spawnDamageNum(e.x, e.y, b.damage, '#ffea60');
+          if (e.hp <= 0) {
+            // 死亡
+            onEnemyDeath(e);
+            enemies.splice(j,1);
+            player.kills++;
+            totalKills++;
+          }
+          if (b.pierce > 0) { b.pierce--; }
+          else { bullets.splice(i,1); break; }
+        }
+      }
+    } else {
+      // 撞玩家
+      if (dist2(b.x,b.y,player.x,player.y) < (player.r+b.r)*(player.r+b.r)) {
+        if (player.invincible <= 0) {
+          player.hp -= b.damage;
+          player.invincible = 20;
+          camera.shake = 5;
+          spawnBurst(player.x, player.y, '#ff4040', 6, 3);
+        }
+        bullets.splice(i,1);
+      }
+    }
+  }
+}
+
+function onEnemyDeath(e) {
+  // 大型血液飞溅: 死亡时伤口大, 喷血更猛
+  // 随机方向(死亡时已经无力反向喷射)
+  const dAng = Math.random() * TAU;
+  const intensity = e.isBoss ? 3.5 : 2.2;
+  spawnBloodSplatter(e.x, e.y, Math.cos(dAng), Math.sin(dAng), intensity);
+  // 保留少量原尸色+火光(肉块效果)
+  spawnBurst(e.x, e.y, e.color, 6, 3);
+  spawnBurst(e.x, e.y, '#ff8040', 3, 2);
+  player.score += e.score;
+  totalScore += e.score;
+  // 掉落
+  if (Math.random() < 0.18) spawnPickup(e.x, e.y, 'health');
+  if (Math.random() < 0.22) spawnPickup(e.x, e.y, 'ammo');
+  if (Math.random() < 0.05 && !player.hasWeapon('shotgun')) spawnPickup(e.x, e.y, 'weapon_shotgun');
+  if (Math.random() < 0.04 && !player.hasWeapon('rifle'))   spawnPickup(e.x, e.y, 'weapon_rifle');
+  // 伤害数字
+  spawnDamageNum(e.x, e.y, '+'+e.score, '#ffff80');
+}
+
+/* ============== 粒子更新 ============== */
+function updateParticles(dt) {
+  for (let i = particles.length-1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx; p.y += p.vy;
+    p.vx *= 0.92; p.vy *= 0.92;
+    p.life--;
+    if (p.life <= 0) particles.splice(i,1);
+  }
+  for (let i = damageNums.length-1; i >= 0; i--) {
+    const d = damageNums[i];
+    d.y += d.vy; d.vy *= 0.96; d.life--;
+    if (d.life <= 0) damageNums.splice(i,1);
+  }
+}
+
+/* ============== 拾取更新 ============== */
+function updatePickups(dt) {
+  for (let i = pickups.length-1; i >= 0; i--) {
+    const p = pickups[i];
+    p.bob += 0.08;
+    if (dist2(p.x, p.y, player.x, player.y) < (p.r+player.r+14)*(p.r+player.r+14)) {
+      // 拾取
+      if (p.type === 'health') {
+        if (player.hp < player.maxHp) {
+          player.hp = Math.min(player.maxHp, player.hp + 35);
+          spawnBurst(p.x, p.y, '#ff4060', 8, 3);
+          showMessage('+35 生命');
+        } else continue;
+      } else if (p.type === 'ammo') {
+        // 给所有武器补弹：手枪直接补满弹匣，其它加备弹
+        let added = false;
+        for (const wn of player.weapons) {
+          if (wn === 'pistol') {
+            if (player.mag < WEAPONS.pistol.mag) { player.mag = WEAPONS.pistol.mag; added = true; }
+          } else {
+            if (player.ammo < 999) { player.ammo += 12; added = true; }
+          }
+        }
+        if (added) {
+          spawnBurst(p.x, p.y, '#ffc040', 8, 3);
+          showMessage('+12 弹药');
+        } else continue;
+      } else if (p.type === 'weapon_shotgun') {
+        player.giveWeapon('shotgun');
+        player.weaponIdx = player.weapons.indexOf('shotgun');
+        player.mag = WEAPONS.shotgun.mag;
+        player.ammo += 24;
+        spawnBurst(p.x, p.y, '#ff8060', 12, 4);
+        showMessage('获得霰弹枪!');
+      } else if (p.type === 'weapon_rifle') {
+        player.giveWeapon('rifle');
+        player.weaponIdx = player.weapons.indexOf('rifle');
+        player.mag = WEAPONS.rifle.mag;
+        player.ammo += 60;
+        spawnBurst(p.x, p.y, '#80ff80', 12, 4);
+        showMessage('获得步枪!');
+      }
+      pickups.splice(i,1);
+    }
+  }
+}
+
+/* ============== 玩家与敌人接触伤害 ============== */
+function checkContactDamage() {
+  if (player.invincible > 0) return;
+  for (const e of enemies) {
+    if (!e.ranged && dist2(e.x, e.y, player.x, player.y) < (e.r+player.r)*(e.r+player.r)) {
+      player.hp -= e.damage;
+      player.invincible = 24;
+      camera.shake = 5;
+      spawnBurst(player.x, player.y, '#ff4040', 6, 3);
+      break;
+    }
+  }
+}
+
+/* ============== 出口检测 ============== */
+function checkExit() {
+  if (enemies.length > 0) {
+    // 全部清理才能过关（确保可玩）
+    if (Math.random() < 0.005) showMessage('击杀所有僵尸才能离开 ('+enemies.length+' 只剩余)');
+    return;
+  }
+  // 还没生成 BOSS：第 3 关起会出现 BOSS
+  if (!bossSpawned && level >= 2) {
+    spawnBoss();
+    return;
+  }
+  // 终关 BOSS 死后即胜利
+  if (level >= 5) {
+    // 最终 BOSS 死后即胜利
+    gameState = 'won';
+    document.getElementById('overlay').innerHTML =
+      '<h1 style="color:#ffd700">胜利!</h1>' +
+      '<h2>你消灭了僵尸危机!</h2>' +
+      '<p>最终分数: <b style="color:#ffea60">'+totalScore+'</b></p>' +
+      '<p>总击杀: <b style="color:#ffea60">'+totalKills+'</b></p>' +
+      '<button onclick="restart()">再来一局</button>';
+    document.getElementById('overlay').style.display = 'flex';
+    return;
+  }
+  gameState = 'levelEnd';
+  levelEndTimer = 90;
+  showMessage('关卡完成! 准备进入下一关...');
+}
+
+/* ============== 渲染 ============== */
+function worldToScreen(x,y) {
+  return [x - camera.x + W/2 + camera.shakeX, y - camera.y + H/2 + camera.shakeY];
+}
+
+/* ----- 角色精灵：T-800 施瓦辛格 (终结者2) ----- */
+function drawTerminator(sx, sy, angle, wpnName, muzzle, hurt) {
+  const fx = Math.cos(angle), fy = Math.sin(angle);
+  const rx = -fy, ry = fx;
+  // 走路时腿的摆动
+  const wp = player.walkPhase;
+  const swing = Math.sin(wp) * (player.isMoving ? 1 : 0);
+  const swingB = Math.cos(wp) * (player.isMoving ? 1 : 0);
+
+  const jacket = hurt ? '#5a2828' : '#1a0e08';
+  const jacketDk = hurt ? '#3a1818' : '#0a0604';
+  const skin = hurt ? '#ff8080' : '#d4a070';
+
+  // 阴影
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.beginPath();
+  ctx.ellipse(sx, sy+14, 15, 5, 0, 0, TAU);
+  ctx.fill();
+
+  // ===== 腿(后,带摆动) =====
+  const legCx = sx - fx*8, legCy = sy - fy*8;
+  // 牛仔裤
+  ctx.fillStyle = '#0e1020';
+  ctx.beginPath();
+  ctx.ellipse(legCx - rx*4 + swing, legCy - ry*4 + swing, 3.5, 7, angle, 0, TAU);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(legCx + rx*4 - swing, legCy + ry*4 - swing, 3.5, 7, angle, 0, TAU);
+  ctx.fill();
+  // 靴子
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.ellipse(legCx - rx*5 + swing*1.2, legCy - ry*5 + swing*1.2, 4.5, 4, 0, 0, TAU);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(legCx + rx*5 - swing*1.2, legCy + ry*5 - swing*1.2, 4.5, 4, 0, 0, TAU);
+  ctx.fill();
+  // 靴子高光
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';
+  ctx.beginPath();
+  ctx.ellipse(legCx - rx*4 + swing*1.2, legCy - ry*4 + swing*1.2, 1.2, 1.5, 0, 0, TAU);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(legCx + rx*4 - swing*1.2, legCy + ry*4 - swing*1.2, 1.2, 1.5, 0, 0, TAU);
+  ctx.fill();
+
+  // ===== 后臂 =====
+  const bHandX = sx - fx*12, bHandY = sy - fy*12;
+  ctx.strokeStyle = jacket;
+  ctx.lineWidth = 5.5;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(sx - rx*8, sy - ry*8);
+  ctx.lineTo(bHandX, bHandY);
+  ctx.stroke();
+  ctx.fillStyle = skin;
+  ctx.beginPath();
+  ctx.arc(bHandX, bHandY, 3, 0, TAU);
+  ctx.fill();
+
+  // ===== 皮夹克身体 =====
+  // 主椭圆
+  ctx.fillStyle = jacket;
+  ctx.beginPath();
+  ctx.ellipse(sx, sy, 14, 11, 0, 0, TAU);
+  ctx.fill();
+  // 皮面高光
+  ctx.fillStyle = 'rgba(255,200,150,0.18)';
+  ctx.beginPath();
+  ctx.ellipse(sx - rx*3, sy - ry*3, 5, 7, 0, 0, TAU);
+  ctx.fill();
+  // 暗面
+  ctx.fillStyle = jacketDk;
+  ctx.beginPath();
+  ctx.ellipse(sx + rx*5, sy + ry*5, 6, 9, 0, 0, TAU);
+  ctx.fill();
+  // 拉链
+  ctx.strokeStyle = '#c0a040';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(sx + fx*3, sy + fy*3);
+  ctx.lineTo(sx + fx*9, sy + fy*9);
+  ctx.stroke();
+  // V 领
+  ctx.fillStyle = '#0a0608';
+  ctx.beginPath();
+  ctx.moveTo(sx + fx*9, sy + fy*9);
+  ctx.lineTo(sx + fx*2, sy + fy*2);
+  ctx.lineTo(sx - fx*2, sy - fy*2);
+  ctx.closePath();
+  ctx.fill();
+  // 黑色内衫
+  ctx.fillStyle = '#040406';
+  ctx.beginPath();
+  ctx.ellipse(sx + fx*4, sy + fy*4, 3.5, 2.5, 0, 0, TAU);
+  ctx.fill();
+  // 腰带
+  ctx.fillStyle = '#000';
+  ctx.fillRect(sx - 14, sy - 1, 28, 2);
+  // 皮带扣
+  ctx.fillStyle = '#d0a040';
+  ctx.fillRect(sx - 2.5, sy - 2, 5, 3);
+  // 枪套
+  ctx.fillStyle = '#3a2618';
+  ctx.beginPath();
+  ctx.ellipse(sx - rx*5, sy - ry*5, 2, 4, angle+Math.PI/2, 0, TAU);
+  ctx.fill();
+  // 肩章
+  ctx.fillStyle = jacketDk;
+  ctx.beginPath();
+  ctx.ellipse(sx + fx*9, sy + fy*9, 8, 5, angle, 0, TAU);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(sx - fx*7, sy - fy*7, 6.5, 4, angle+Math.PI, 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255,200,150,0.18)';
+  ctx.beginPath();
+  ctx.ellipse(sx + fx*8, sy + fy*8, 4, 2.5, angle, 0, TAU);
+  ctx.fill();
+
+  // ===== 头部 =====
+  const hx = sx + fx*13, hy = sy + fy*13;
+  // 头发
+  ctx.fillStyle = '#1a0e06';
+  ctx.beginPath();
+  ctx.arc(hx, hy, 8.5, 0, TAU);
+  ctx.fill();
+  // 脸
+  ctx.fillStyle = skin;
+  ctx.beginPath();
+  ctx.arc(hx + fx*2, hy + fy*2, 7.5, 0, TAU);
+  ctx.fill();
+  // 方下巴
+  ctx.save();
+  ctx.translate(hx + fx*4, hy + fy*4);
+  ctx.rotate(angle);
+  ctx.fillStyle = hurt ? '#cc7070' : '#b88858';
+  ctx.beginPath();
+  ctx.moveTo(-5, -1.5);
+  ctx.lineTo(5, -1.5);
+  ctx.lineTo(7, 4.5);
+  ctx.lineTo(-7, 4.5);
+  ctx.closePath();
+  ctx.fill();
+  // 下巴阴影
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.beginPath();
+  ctx.moveTo(-7, 4.5);
+  ctx.lineTo(7, 4.5);
+  ctx.lineTo(5, 5.5);
+  ctx.lineTo(-5, 5.5);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  // 墨镜
+  ctx.save();
+  ctx.translate(hx + fx*2, hy + fy*2);
+  ctx.rotate(angle);
+  // 镜框
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.ellipse(-3.5, 0, 3.8, 2.8, 0, 0, TAU);
+  ctx.ellipse(3.5, 0, 3.8, 2.8, 0, 0, TAU);
+  ctx.fill();
+  // 镜架
+  ctx.fillRect(-0.5, -2, 1, 4);
+  // 红色目镜
+  ctx.fillStyle = '#ff2020';
+  ctx.beginPath();
+  ctx.ellipse(-3.5, 0, 3, 2, 0, 0, TAU);
+  ctx.ellipse(3.5, 0, 3, 2, 0, 0, TAU);
+  ctx.fill();
+  // 中心亮点
+  ctx.fillStyle = '#ff8080';
+  ctx.beginPath();
+  ctx.arc(-3.5, -0.6, 0.8, 0, TAU);
+  ctx.arc(3.5, -0.6, 0.8, 0, TAU);
+  ctx.fill();
+  ctx.restore();
+
+  // ===== 前臂(持枪) =====
+  const fHandX = sx + fx*19, fHandY = sy + fy*19;
+  ctx.strokeStyle = jacket;
+  ctx.lineWidth = 6;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(sx + fx*8, sy + fy*8);
+  ctx.lineTo(fHandX, fHandY);
+  ctx.stroke();
+  // 袖口高光
+  ctx.fillStyle = 'rgba(255,200,150,0.15)';
+  ctx.beginPath();
+  ctx.ellipse(fHandX - fx*2, fHandY - fy*2, 1.5, 3, angle, 0, TAU);
+  ctx.fill();
+  // 手
+  ctx.fillStyle = skin;
+  ctx.beginPath();
+  ctx.arc(fHandX, fHandY, 3.5, 0, TAU);
+  ctx.fill();
+
+  // ===== 武器 =====
+  const wx1 = sx + fx*38, wy1 = sy + fy*38;
+  // 枪托
+  ctx.strokeStyle = wpnName==='shotgun' ? '#5a3a1a' : '#2a2a2a';
+  ctx.lineWidth = wpnName==='shotgun'?10:wpnName==='rifle'?6:5;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(fHandX, fHandY);
+  ctx.lineTo(wx1, wy1);
+  ctx.stroke();
+  // 枪管
+  ctx.strokeStyle = '#0a0a0a';
+  ctx.lineWidth = wpnName==='shotgun'?5:wpnName==='rifle'?3:2.5;
+  ctx.beginPath();
+  ctx.moveTo(sx + fx*22, sy + fy*22);
+  ctx.lineTo(wx1, wy1);
+  ctx.stroke();
+  // 步枪: 弹匣
+  if (wpnName === 'rifle') {
+    ctx.fillStyle = '#1a1a1a';
+    ctx.save();
+    ctx.translate((fHandX+wx1)/2 + rx*3, (fHandY+wy1)/2 + ry*3);
+    ctx.rotate(angle + Math.PI/2);
+    ctx.fillRect(-1.5, 0, 3, 7);
+    ctx.restore();
+  }
+  // 霰弹枪: 红色前护木
+  if (wpnName === 'shotgun') {
+    ctx.fillStyle = '#3a1a0a';
+    ctx.save();
+    ctx.translate(sx + fx*28, sy + fy*28);
+    ctx.rotate(angle);
+    ctx.fillRect(-3, -4, 6, 8);
+    ctx.restore();
+  }
+  // 准星
+  ctx.fillStyle = '#ff4040';
+  ctx.beginPath();
+  ctx.arc(wx1, wy1, 1.2, 0, TAU);
+  ctx.fill();
+
+  // ===== 枪口火光 =====
+  if (muzzle > 0) {
+    const mfx = sx + fx*40, mfy = sy + fy*40;
+    const rad = 9 + Math.random()*4;
+    ctx.fillStyle = '#ff8020';
+    ctx.beginPath();
+    ctx.arc(mfx, mfy, rad*1.2, 0, TAU);
+    ctx.fill();
+    ctx.fillStyle = '#ffea60';
+    ctx.beginPath();
+    ctx.arc(mfx, mfy, rad, 0, TAU);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(mfx, mfy, rad*0.4, 0, TAU);
+    ctx.fill();
+  }
+}
+
+function drawResidentZombie(sx, sy, e) {
+  const ea = angleTo(e.x, e.y, player.x, player.y);
+  const fx = Math.cos(ea), fy = Math.sin(ea);
+  const rx = -fy, ry = fx;
+  const flash = e.hitFlash > 0;
+  const isBoss = e.isBoss;
+  const R = e.r;
+  const v = e.variation || { skinTone:0.3, tornDir:1, armDrag:1, jawTilt:0, rotPhase:0, limp:false, exposed:true };
+
+  // === 动画: 抽搐 + 拖步 + 摆动 ===
+  const ph = v.rotPhase;
+  const twitch   = Math.sin(e.anim * 1.5 + ph) * 1.4;
+  const twitch2  = Math.cos(e.anim * 0.9 + ph) * 1.2;
+  const shamble  = Math.sin(e.anim * 0.6 + ph) * 2.2;   // 拖步
+  const shamble2 = Math.cos(e.anim * 0.4 + ph) * 1.4;
+  const armTwitch= Math.sin(e.anim * 1.8 + ph) * 1.6;
+  const leanAmt  = Math.sin(e.anim * 0.35 + ph) * 0.12;  // 身体侧倾
+
+  // === 病态肤色(4 选 1) ===
+  const skinP = [
+    { l:'#7a8a5a', d:'#4a5a3a', cloth:'#3a3a3a' }, // 灰绿尸
+    { l:'#8a7a5a', d:'#5a4a2a', cloth:'#4a3020' }, // 灰棕腐
+    { l:'#5a6a6a', d:'#3a4a4a', cloth:'#2a2a2a' }, // 灰青死
+    { l:'#9a7a5a', d:'#5a3a1a', cloth:'#3a2010' }, // 腐败棕
+  ];
+  const sp = skinP[Math.floor(v.skinTone * skinP.length) % skinP.length];
+  const skin  = flash ? '#fff' : sp.l;
+  const skinD = flash ? '#fff' : sp.d;
+  const cloth = flash ? '#fff' : sp.cloth;
+  const blood = flash ? '#fff' : '#aa1010';
+  const bloodD= flash ? '#fff' : '#5a0808';
+  const bone  = flash ? '#fff' : '#e8dcc0';
+  const boneD = flash ? '#fff' : '#a89878';
+
+  // 阴影
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.beginPath();
+  ctx.ellipse(sx, sy+12, R*1.0, R*0.4, 0, 0, TAU);
+  ctx.fill();
+
+  // BOSS 红光光环
+  if (isBoss) {
+    const grad = ctx.createRadialGradient(sx, sy, R*0.6, sx, sy, R*2);
+    grad.addColorStop(0, 'rgba(255,40,40,0.35)');
+    grad.addColorStop(1, 'rgba(255,40,40,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(sx, sy, R*2, 0, TAU);
+    ctx.fill();
+  }
+
+  // ===== 后腿(瘸腿/拖步) =====
+  // 瘸的那条腿拖在身后, 另一条正常
+  const limp = v.limp;
+  const backLegPhase = shamble * (limp ? 0.3 : 0.6);
+  // 瘸腿(在身后拖行, 弯曲)
+  ctx.fillStyle = skinD;
+  ctx.beginPath();
+  ctx.ellipse(sx - fx*7 - rx*2 + backLegPhase*0.4,
+              sy - fy*7 - ry*2 + backLegPhase*0.4,
+              3.5, 6, ea + 0.5, 0, TAU);
+  ctx.fill();
+  // 脚
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath();
+  ctx.ellipse(sx - fx*9 - rx*2 + backLegPhase,
+              sy - fy*9 - ry*2 + backLegPhase,
+              4, 3, 0, 0, TAU);
+  ctx.fill();
+  // 暴露的膝盖骨
+  if (!flash) {
+    ctx.fillStyle = bone;
+    ctx.beginPath();
+    ctx.arc(sx - fx*4 - rx*2, sy - fy*4 - ry*2, 1.4, 0, TAU);
+    ctx.fill();
+  }
+
+  // ===== 拖地的后臂(长出一截, 拖在地上) =====
+  // 拖地手 — 长度由 v.armDrag 决定
+  const dragLen = 8 + v.armDrag * 6;
+  const bHandX = sx - fx*dragLen - rx*4;
+  const bHandY = sy - fy*dragLen - ry*4 + shamble * 0.6;
+  // 袖子(短)
+  ctx.strokeStyle = cloth;
+  ctx.lineWidth = 5.5;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(sx - rx*8, sy - ry*8);
+  ctx.lineTo(sx - fx*4, sy - fy*4);
+  ctx.stroke();
+  // 皮肤(更长)
+  ctx.strokeStyle = skinD;
+  ctx.lineWidth = 4.5;
+  ctx.beginPath();
+  ctx.moveTo(sx - fx*4, sy - fy*4);
+  ctx.lineTo(bHandX, bHandY);
+  ctx.stroke();
+  // 肘部露骨
+  if (!flash) {
+    ctx.fillStyle = bone;
+    ctx.beginPath();
+    ctx.arc(sx - fx*7, sy - fy*7, 1.4, 0, TAU);
+    ctx.fill();
+  }
+  // 拖地的手
+  ctx.fillStyle = skin;
+  ctx.beginPath();
+  ctx.arc(bHandX, bHandY, 3, 0, TAU);
+  ctx.fill();
+  // 4 根弯曲长爪
+  for (let i = 0; i < 4; i++) {
+    const a = ea + Math.PI + (i-1.5)*0.28;
+    ctx.fillStyle = i === 1 ? bone : skinD;
+    ctx.beginPath();
+    ctx.ellipse(bHandX + Math.cos(a)*2.2, bHandY + Math.sin(a)*2.2,
+      0.7, 2.2, a, 0, TAU);
+    ctx.fill();
+  }
+  // 拖地手的血
+  if (!flash) {
+    ctx.fillStyle = blood;
+    ctx.beginPath();
+    ctx.arc(bHandX, bHandY, 1.4, 0, TAU);
+    ctx.fill();
+  }
+
+  // ===== 身体 =====
+  ctx.save();
+  ctx.translate(sx, sy);
+  ctx.rotate(leanAmt + Math.sin(e.anim*0.3+ph)*0.05);
+  // 主身体(瘦长, 不对称)
+  ctx.fillStyle = skin;
+  ctx.beginPath();
+  ctx.ellipse(0, shamble2*0.5, R*1.05, R*0.85, 0, 0, TAU);
+  ctx.fill();
+  // 暗面
+  ctx.fillStyle = skinD;
+  ctx.beginPath();
+  ctx.ellipse(-rx*4, -ry*4, R*0.5, R*0.5, 0, 0, TAU);
+  ctx.fill();
+  // === 暴露的肋骨(随机显示) ===
+  if (v.exposed && !flash) {
+    ctx.strokeStyle = bone;
+    ctx.lineWidth = 1.2;
+    for (let i = -2; i <= 2; i++) {
+      const offY = i * 1.8;
+      ctx.beginPath();
+      ctx.moveTo(fx*2 + rx*offY, fy*2 + ry*offY);
+      ctx.lineTo(fx*8 + rx*offY, fy*8 + ry*offY);
+      ctx.stroke();
+    }
+    // 肋骨之间的肉
+    ctx.fillStyle = '#5a1a1a';
+    ctx.beginPath();
+    ctx.ellipse(fx*4 + rx*1, fy*4 + ry*1, 4, 1.5, ea+0.3, 0, TAU);
+    ctx.fill();
+  }
+  // === 撕开的衬衫(前片, 破烂) ===
+  ctx.fillStyle = cloth;
+  ctx.beginPath();
+  ctx.ellipse(fx*2, fy*2 + shamble2*0.5, R*0.7, R*0.6, ea, 0, TAU);
+  ctx.fill();
+  // 衬衫后片
+  ctx.beginPath();
+  ctx.ellipse(-fx*2, -fy*2 + shamble2*0.5, R*0.55, R*0.45, ea+Math.PI, 0, TAU);
+  ctx.fill();
+  // 衬衫破洞(露出皮肤)
+  if (!flash) {
+    ctx.fillStyle = skinD;
+    ctx.beginPath();
+    ctx.arc(fx*3 - rx*3, fy*3 - ry*3 + shamble2*0.5, 2.2, 0, TAU);
+    ctx.fill();
+  }
+  // === 肩膀咬伤(大血洞) ===
+  if (!flash) {
+    ctx.fillStyle = bloodD;
+    ctx.beginPath();
+    ctx.arc(fx*9 - rx*3, fy*9 - ry*3 + shamble2*0.5, 2.8, 0, TAU);
+    ctx.fill();
+    ctx.fillStyle = blood;
+    ctx.beginPath();
+    ctx.arc(fx*9 - rx*3, fy*9 - ry*3 + shamble2*0.5, 1.6, 0, TAU);
+    ctx.fill();
+  }
+  // === 撕裂露出肌肉 ===
+  if (!flash) {
+    ctx.fillStyle = '#5a1a1a';
+    ctx.beginPath();
+    ctx.ellipse(fx*3 - rx*2, fy*3 - ry*2 + shamble2*0.5, 2, 1.2, ea+0.3, 0, TAU);
+    ctx.fill();
+  }
+  // === 脊椎骨(背部) ===
+  if (v.exposed && !flash) {
+    ctx.fillStyle = bone;
+    for (let i = -3; i <= 3; i++) {
+      ctx.beginPath();
+      ctx.arc(-fx*5 + rx*i*0.8, -fy*5 + ry*i*0.8, 0.8, 0, TAU);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+
+  // ===== 头部 =====
+  const hx = sx + fx*11, hy = sy + fy*11 + shamble2*0.5;
+  ctx.save();
+  ctx.translate(hx, hy);
+  ctx.rotate(ea + v.jawTilt);
+  // 顶部暴露的颅骨(腐烂)
+  if (!flash && v.exposed) {
+    ctx.fillStyle = bone;
+    ctx.beginPath();
+    ctx.arc(-2, -3, 2.5, 0, TAU);
+    ctx.fill();
+    // 颅骨裂缝
+    ctx.strokeStyle = boneD;
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(-3, -4); ctx.lineTo(-1.5, -2);
+    ctx.moveTo(-1.5, -2); ctx.lineTo(0, -4);
+    ctx.stroke();
+  }
+  // 头(头型偏小, 烂了一半)
+  ctx.fillStyle = skin;
+  ctx.beginPath();
+  ctx.arc(0, 0, R*0.6, 0, TAU);
+  ctx.fill();
+  // 腐烂斑
+  ctx.fillStyle = skinD;
+  ctx.beginPath();
+  ctx.arc(-rx*3, -ry*3, R*0.25, 0, TAU);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(fx*2, fy*2, R*0.15, 0, TAU);
+  ctx.fill();
+  // 暴露的骨头(下颌)
+  if (!flash) {
+    ctx.fillStyle = bone;
+    ctx.beginPath();
+    ctx.arc(rx*3.5, ry*3.5, 1.4, 0, TAU);
+    ctx.fill();
+    // 头侧骨
+    ctx.beginPath();
+    ctx.arc(-rx*2 - fx*1.5, -ry*2 - fy*1.5, 1, 0, TAU);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  // ===== 眼睛 (一只有, 一只空洞) =====
+  // 眼眶位置
+  const eyeL = { x: hx + fx*1.5 - rx*2.5, y: hy + fy*1.5 - ry*2.5 };
+  const eyeR = { x: hx + fx*1.5 + rx*2.5, y: hy + fy*1.5 + ry*2.5 };
+  const hollowEye = v.tornDir < 0 ? eyeL : eyeR;
+  const litEye    = v.tornDir < 0 ? eyeR : eyeL;
+
+  // 空洞眼(黑洞 + 周围血迹)
+  if (!flash) {
+    ctx.fillStyle = bloodD;
+    ctx.beginPath();
+    ctx.ellipse(hollowEye.x, hollowEye.y, 2.8, 2, ea, 0, TAU);
+    ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.ellipse(hollowEye.x, hollowEye.y, 2.0, 1.4, ea, 0, TAU);
+    ctx.fill();
+  } else {
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.ellipse(hollowEye.x, hollowEye.y, 2.0, 1.4, ea, 0, TAU);
+    ctx.fill();
+  }
+
+  // 发光的眼睛
+  ctx.fillStyle = '#1a0a0a';
+  ctx.beginPath();
+  ctx.ellipse(litEye.x, litEye.y, 2.4, 1.7, ea, 0, TAU);
+  ctx.fill();
+  if (!flash) {
+    // 发光晕(红/黄, 普通=BOSS 不同)
+    const glow = isBoss ? 'rgba(255,30,30,0.55)' : 'rgba(255,200,30,0.5)';
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(litEye.x, litEye.y, 3.5, 0, TAU);
+    ctx.fill();
+  }
+  // 眼珠
+  ctx.fillStyle = isBoss ? '#ff2020' : (flash ? '#fff' : '#ffd820');
+  ctx.beginPath();
+  ctx.arc(litEye.x, litEye.y, 1.4, 0, TAU);
+  ctx.fill();
+  // 瞳孔
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.arc(litEye.x, litEye.y, 0.6, 0, TAU);
+  ctx.fill();
+
+  // ===== 下垂脱臼的嘴 =====
+  ctx.save();
+  ctx.translate(hx + fx*3, hy + fy*3);
+  ctx.rotate(ea);
+  // 嘴内(深红)
+  ctx.fillStyle = flash ? '#fff' : '#3a0606';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 3.6, 2.5, 0, 0, TAU);
+  ctx.fill();
+  // 上牙(参差不齐)
+  ctx.fillStyle = flash ? '#fff' : '#d8d0b8';
+  ctx.fillRect(-3.2, -2, 0.8, 1.2);
+  ctx.fillRect(-1.6, -2, 0.7, 1);
+  ctx.fillRect(-0.1, -2, 0.8, 1.2);
+  ctx.fillRect(1.5, -2, 0.6, 0.8);
+  ctx.fillRect(2.5, -2, 0.6, 1.1);
+  // 下牙(脱落几颗)
+  ctx.fillRect(-2.5, 0.8, 0.7, 0.9);
+  ctx.fillRect(-1, 0.8, 0.7, 0.9);
+  ctx.fillRect(1.2, 0.8, 0.6, 0.9);
+  // 下颌(脱臼) 略微下垂
+  if (!flash) {
+    ctx.fillStyle = skinD;
+    ctx.beginPath();
+    ctx.ellipse(0, 3.2, 3.2, 1.1, 0, 0, TAU);
+    ctx.fill();
+    // 嘴边的血迹
+    ctx.fillStyle = bloodD;
+    ctx.beginPath();
+    ctx.ellipse(-3, 1, 0.8, 0.5, 0, 0, TAU);
+    ctx.fill();
+    ctx.fillStyle = blood;
+    ctx.beginPath();
+    ctx.ellipse(0.3, 2.5, 2, 0.6, 0, 0, TAU);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  // ===== 前臂(伸出) =====
+  const fHandX = sx + fx*14 + Math.cos(e.anim*1.7+ph)*1.2;
+  const fHandY = sy + fy*14 + shamble2*0.5 + Math.sin(e.anim*1.7+ph)*1.2;
+  // 袖子
+  ctx.strokeStyle = cloth;
+  ctx.lineWidth = 5.5;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(sx + fx*5, sy + fy*5 + shamble2*0.5);
+  ctx.lineTo(sx + fx*9, sy + fy*9 + shamble2*0.5);
+  ctx.stroke();
+  // 皮肤
+  ctx.strokeStyle = skin;
+  ctx.lineWidth = 4.5;
+  ctx.beginPath();
+  ctx.moveTo(sx + fx*9, sy + fy*9 + shamble2*0.5);
+  ctx.lineTo(fHandX, fHandY);
+  ctx.stroke();
+  // 肘部露骨
+  if (!flash) {
+    ctx.fillStyle = bone;
+    ctx.beginPath();
+    ctx.arc((sx + fx*9 + fHandX)/2, (sy + fy*9 + fHandY)/2 + shamble2*0.5, 1.4, 0, TAU);
+    ctx.fill();
+  }
+  // 手
+  ctx.fillStyle = skin;
+  ctx.beginPath();
+  ctx.arc(fHandX, fHandY, 3.5, 0, TAU);
+  ctx.fill();
+  // 4 根长爪
+  for (let i = 0; i < 4; i++) {
+    const a = ea + (i-1.5)*0.28;
+    ctx.fillStyle = (i === 1) ? bone : skinD;
+    ctx.beginPath();
+    ctx.ellipse(fHandX + Math.cos(a)*3, fHandY + Math.sin(a)*3,
+      0.7, 2.5, a, 0, TAU);
+    ctx.fill();
+  }
+  // 手的血
+  if (!flash) {
+    ctx.fillStyle = blood;
+    ctx.beginPath();
+    ctx.arc(fHandX, fHandY, 1.6, 0, TAU);
+    ctx.fill();
+  }
+}
+
+function render() {
+  // 背景
+  ctx.fillStyle = levelTheme.bg;
+  ctx.fillRect(0,0,W,H);
+  // 视口
+  const vw = W, vh = H;
+  // 地面
+  const startX = Math.max(0, Math.floor((camera.x - W/2) / TILE));
+  const startY = Math.max(0, Math.floor((camera.y - H/2) / TILE));
+  const endX = Math.min(mapW, Math.ceil((camera.x + W/2) / TILE) + 1);
+  const endY = Math.min(mapH, Math.ceil((camera.y + H/2) / TILE) + 1);
+  for (let ty = startY; ty < endY; ty++) {
+    for (let tx = startX; tx < endX; tx++) {
+      const [sx, sy] = worldToScreen(tx*TILE, ty*TILE);
+      if (isWall(tx,ty)) {
+        ctx.fillStyle = levelTheme.wall;
+        ctx.fillRect(sx, sy, TILE+1, TILE+1);
+        // 顶部高光
+        ctx.fillStyle = 'rgba(255,255,255,0.08)';
+        ctx.fillRect(sx, sy, TILE+1, 4);
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.fillRect(sx, sy+TILE-3, TILE+1, 4);
+        // 砖块纹理
+        ctx.fillStyle = 'rgba(0,0,0,0.2)';
+        ctx.fillRect(sx+TILE/2-1, sy, 2, TILE+1);
+        ctx.fillRect(sx, sy+TILE/2-1, TILE+1, 2);
+      } else {
+        ctx.fillStyle = levelTheme.floor;
+        ctx.fillRect(sx, sy, TILE+1, TILE+1);
+        // 棋盘格变体
+        if ((tx+ty) % 2 === 0) {
+          ctx.fillStyle = 'rgba(255,255,255,0.025)';
+          ctx.fillRect(sx, sy, TILE+1, TILE+1);
+        }
+        // 出口
+        if (isExit(tx,ty)) {
+          ctx.fillStyle = levelTheme.accent;
+          ctx.fillRect(sx+2, sy+2, TILE-4, TILE-4);
+          ctx.fillStyle = '#fff';
+          ctx.font = 'bold 22px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('EXIT', sx+TILE/2, sy+TILE/2);
+        }
+      }
+    }
+  }
+
+  // 地面血迹(在地面之上, 实体之下)
+  renderBloodDecals();
+
+  // 拾取物
+  for (const p of pickups) {
+    const [sx,sy] = worldToScreen(p.x, p.y);
+    const bob = Math.sin(p.bob)*3;
+    const info = PICKUP_TYPES[p.type];
+    // 光晕
+    const grad = ctx.createRadialGradient(sx, sy+bob, 0, sx, sy+bob, 24);
+    grad.addColorStop(0, info.color+'cc');
+    grad.addColorStop(1, info.color+'00');
+    ctx.fillStyle = grad;
+    ctx.fillRect(sx-24, sy+bob-24, 48, 48);
+    // 主体
+    ctx.fillStyle = info.color;
+    ctx.beginPath();
+    ctx.arc(sx, sy+bob, p.r, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // 字符
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 18px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(info.char, sx, sy+bob+1);
+  }
+
+  // 敌人
+  for (const e of enemies) {
+    const [sx,sy] = worldToScreen(e.x, e.y);
+    // 摆动让身体有节奏
+    const wobble = Math.sin(e.anim)*1.5;
+    drawResidentZombie(sx, sy+wobble, e);
+    // 血条
+    if (e.hp < e.maxHp) {
+      const bw = e.r*2;
+      ctx.fillStyle = '#400';
+      ctx.fillRect(sx-bw/2, sy-e.r-10, bw, 4);
+      ctx.fillStyle = e.isBoss ? '#ff4040' : '#ff8060';
+      ctx.fillRect(sx-bw/2, sy-e.r-10, bw*(e.hp/e.maxHp), 4);
+    }
+    // BOSS 名称
+    if (e.isBoss) {
+      ctx.fillStyle = '#ff4040';
+      ctx.font = 'bold 14px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText('★ '+e.name+' ★', sx, sy-e.r-14);
+    }
+  }
+
+  // 子弹
+  for (const b of bullets) {
+    const [sx,sy] = worldToScreen(b.x, b.y);
+    // 拖尾
+    ctx.fillStyle = b.color+'88';
+    ctx.beginPath();
+    ctx.arc(sx - b.vx*1.2, sy - b.vy*1.2, b.r*0.8, 0, TAU);
+    ctx.fill();
+    ctx.fillStyle = b.color;
+    ctx.beginPath();
+    ctx.arc(sx, sy, b.r, 0, TAU);
+    ctx.fill();
+    if (b.fromPlayer) {
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(sx, sy, b.r*0.5, 0, TAU);
+      ctx.fill();
+    }
+  }
+
+  // 玩家
+  {
+    const [sx,sy] = worldToScreen(player.x, player.y);
+    const wn = player.weapons[player.weaponIdx];
+    const hurt = player.invincible>0 && Math.floor(player.invincible/4)%2===0;
+    drawTerminator(sx, sy, player.angle, wn, player.muzzleFlash, hurt);
+  }
+
+  // 粒子
+  for (const p of particles) {
+    const [sx,sy] = worldToScreen(p.x, p.y);
+    const a = p.life/p.maxLife;
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = a;
+    ctx.fillRect(sx-p.size/2, sy-p.size/2, p.size, p.size);
+  }
+  ctx.globalAlpha = 1;
+
+  // 飞行中的血滴(在粒子之上, 数字之下)
+  renderBloodDroplets();
+
+  // 伤害数字
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const d of damageNums) {
+    const [sx,sy] = worldToScreen(d.x, d.y);
+    const a = d.life/d.maxLife;
+    ctx.fillStyle = d.color;
+    ctx.globalAlpha = a;
+    ctx.font = 'bold 16px sans-serif';
+    ctx.fillText(d.val, sx, sy);
+  }
+  ctx.globalAlpha = 1;
+
+  // 准星
+  {
+    const cx = mouse.x, cy = mouse.y;
+    ctx.strokeStyle = 'rgba(255,80,80,0.9)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx-10, cy); ctx.lineTo(cx-4, cy);
+    ctx.moveTo(cx+4, cy); ctx.lineTo(cx+10, cy);
+    ctx.moveTo(cx, cy-10); ctx.lineTo(cx, cy-4);
+    ctx.moveTo(cx, cy+4); ctx.lineTo(cx, cy+10);
+    ctx.stroke();
+  }
+
+  // 重新装弹提示
+  const w = currentWeapon();
+  if (player.reloading) {
+    const [sx,sy] = worldToScreen(player.x, player.y);
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(sx-30, sy-32, 60, 10);
+    ctx.fillStyle = '#ffea60';
+    const prog = 1 - (player.reloadCD / w.reload);
+    ctx.fillRect(sx-30, sy-32, 60*prog, 10);
+    ctx.fillStyle = '#fff';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('装弹中', sx, sy-40);
+  }
+
+  // 渲染小地图
+  renderMinimap();
+}
+
+function renderMinimap() {
+  mctx.fillStyle = 'rgba(0,0,0,0.85)';
+  mctx.fillRect(0,0,160,160);
+  const sx = 160 / mapW;
+  const sy = 160 / mapH;
+  // 墙
+  mctx.fillStyle = levelTheme.wall;
+  for (let ty=0;ty<mapH;ty++) for (let tx=0;tx<mapW;tx++) {
+    if (isWall(tx,ty)) mctx.fillRect(tx*sx, ty*sy, sx+1, sy+1);
+  }
+  // 出口
+  mctx.fillStyle = levelTheme.accent;
+  for (const k of exits) {
+    const [x,y] = k.split(',').map(Number);
+    mctx.fillRect(x*sx, y*sy, sx+1, sy+1);
+  }
+  // 敌人
+  mctx.fillStyle = '#f44';
+  for (const e of enemies) {
+    mctx.fillRect(e.x/TILE*sx-1, e.y/TILE*sy-1, 2, 2);
+  }
+  // 玩家
+  mctx.fillStyle = '#0ff';
+  mctx.fillRect(player.x/TILE*sx-2, player.y/TILE*sy-2, 4, 4);
+  // 边框
+  mctx.strokeStyle = '#4a4';
+  mctx.lineWidth = 2;
+  mctx.strokeRect(0,0,160,160);
+}
+
+/* ============== HUD 更新 ============== */
+function updateHUD() {
+  document.getElementById('lvl').textContent = (level+1);
+  document.getElementById('kills').textContent = totalKills;
+  document.getElementById('score').textContent = totalScore;
+  document.getElementById('hpText').textContent = Math.max(0, Math.floor(player.hp));
+  document.getElementById('hpFill').style.width = (Math.max(0, player.hp/player.maxHp)*100) + '%';
+  const w = currentWeapon();
+  document.getElementById('weaponName').textContent = w.name;
+  let ammoStr;
+  if (player.weapons[player.weaponIdx] === 'pistol') {
+    ammoStr = player.mag + ' / ∞';
+  } else {
+    ammoStr = player.mag + ' / ' + player.ammo + (player.reloading?' (装弹)':'');
+  }
+  document.getElementById('ammo').textContent = ammoStr;
+}
+
+function showMessage(text) {
+  const el = document.getElementById('message');
+  el.textContent = text;
+  el.style.opacity = '1';
+  messageTimer = 120;
+}
+function updateMessage() {
+  if (messageTimer > 0) {
+    messageTimer--;
+    if (messageTimer <= 0) document.getElementById('message').style.opacity = '0';
+  }
+}
+
+/* ============== 主循环 ============== */
+function gameLoop(now) {
+  try {
+  const dt = Math.min(now - lastTime, 50);
+  lastTime = now;
+  frame++;
+  if (gameState === 'playing') {
+    updatePlayer(dt);
+    updateEnemies(dt);
+    updateBullets(dt);
+    updateParticles(dt);
+    updateBloodDroplets();
+    updatePickups(dt);
+    updateCamera();
+    checkContactDamage();
+    // 波次生成
+    if (enemies.length < 4 + currentWave && levelZombiesLeft > 0) {
+      waveTimer -= dt;
+      if (waveTimer <= 0) {
+        spawnWave();
+        waveTimer = 2200 - level*200; // 越来越快
+      }
+    }
+    // 出口
+    const [ptx, pty] = worldToTile(player.x, player.y);
+    if (isExit(ptx, pty)) checkExit();
+    // 死亡
+    if (player.hp <= 0) {
+      player.lives++;      if (player.lives < 5) {
+        // 复活
+        player.hp = player.maxHp;
+        player.x = 2*TILE + TILE/2; player.y = 2*TILE + TILE/2;
+        player.invincible = 180;
+        showMessage('阵亡! 剩余生命: ' + (5-player.lives));
+        spawnBurst(player.x, player.y, '#ff4040', 20, 5);
+      } else {
+        gameState = 'lost';
+        document.getElementById('overlay').innerHTML =
+          '<h1>游戏结束</h1>' +
+          '<h2 style="color:#f80">你被僵尸吞噬了...</h2>' +
+          '<p>击杀: <b style="color:#ffea60">'+totalKills+'</b> &nbsp; 分数: <b style="color:#ffea60">'+totalScore+'</b></p>' +
+          '<p>抵达关卡: <b style="color:#ffea60">'+(level+1)+' / 6</b></p>' +
+          '<button onclick="restart()">重新开始</button>';
+        document.getElementById('overlay').style.display = 'flex';
+      }
+    }
+    updateHUD();
+    updateMessage();
+  } else if (gameState === 'levelEnd') {
+    updateParticles(dt);
+    updateBloodDroplets();
+    updateCamera();
+    levelEndTimer--;
+    if (levelEndTimer <= 0) {
+      level++;
+      loadLevel(level);
+      gameState = 'playing';
+    }
+  }
+  render();
+  requestAnimationFrame(gameLoop);
+  } catch (err) {
+    console.error('gameLoop error:', err);
+    requestAnimationFrame(gameLoop);
+  }
+}
+
+function restart() {
+  document.getElementById('overlay').style.display = 'none';
+  startGame();
+}
+
+document.getElementById('startBtn').addEventListener('click', ()=>{
+  startGame();
+});
+
+// 启动
+makeMap(0); // 预加载
+player.x = 2*TILE + TILE/2; player.y = 2*TILE + TILE/2;
+camera.x = player.x; camera.y = player.y;
+player.mag = WEAPONS.pistol.mag;
+player.ammo = 999;
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
